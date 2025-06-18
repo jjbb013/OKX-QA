@@ -73,8 +73,7 @@ def send_bark_notification(title, message):
     payload = {
         'title': title,
         'body': message,
-        'group': BARK_GROUP,
-        'sound': 'minuet'
+        'group': BARK_GROUP
     }
     headers = {'Content-Type': 'application/json'}
 

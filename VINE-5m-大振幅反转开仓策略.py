@@ -1,11 +1,11 @@
 """
 任务名称
-name: OKX VINE 大振幅反转
+name: OKX VINE 大振幅反转策略
 定时规则
 cron: 1 */5 * * * *
 """
 import os
-IS_DEVELOPMENT = True
+IS_DEVELOPMENT = False
 # ====== 自动预加载本地开发环境变量 ======
 try:
     from utils.okx_utils import IS_DEVELOPMENT
@@ -29,9 +29,9 @@ ORDER_EXPIRE_HOURS = 1   # 订单有效期（小时）
 RANGE2_THRESHOLD = 4.2   # 振幅阈值（%）
 SLIPPAGE_PERC = 0.5      # 滑点百分比
 SYMBOL = "ETH-USDT-SWAP"
-QTY_USDT = 100           # 名义下单金额
+QTY_USDT = 10           # 名义下单金额
 KLINE_INTERVAL = "5m"
-FAKE_KLINE = True  # 测试开关，True 时用假K线数据
+FAKE_KLINE = False  # 测试开关，True 时用假K线数据
 CONTRACT_FACE_VALUE = 0.01  # ETH-USDT-SWAP每张合约面值
 
 logger = logging.getLogger("VINE-5m-大振幅反转开仓策略")

@@ -43,10 +43,10 @@ FAKE_KLINE_LONG = [
 ]
 
 def calc_qty(entry_price):
-    # 动态计算下单数量（保证金*杠杆/合约面值/价格），保留2位小数
+    # 动态计算下单数量（保证金*杠杆/合约面值/价格），再乘以10，保留2位小数
     trade_value = MARGIN * LEVERAGE
     raw_qty = trade_value / entry_price
-    qty = round(raw_qty, 2)
+    qty = round(raw_qty * 10, 2)
     return qty
 
 def main():

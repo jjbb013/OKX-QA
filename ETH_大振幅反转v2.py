@@ -29,7 +29,7 @@ TAKE_PROFIT_PERC = 1.4  # 止盈百分比
 STOP_LOSS_PERC = 0.9  # 止损百分比
 AMPLITUDE_PERC = 1.7  # 振幅阈值
 SLIPPAGE = 0.01  # 滑点
-MIN_QTY = 0.0001  # 最小下单数量
+MIN_QTY = 0.001  # 最小下单数量
 ACCOUNT_SUFFIXES = ["", "1"]  # 支持多账户
 
 notification_service = NotificationService()
@@ -43,10 +43,10 @@ FAKE_KLINE_LONG = [
 ]
 
 def calc_qty(entry_price):
-    # 动态计算下单数量（保证金*杠杆/合约面值/价格）
+    # 动态计算下单数量（保证金*杠杆/合约面值/价格），保留3位小数
     trade_value = MARGIN * LEVERAGE
     raw_qty = trade_value / entry_price
-    qty = round(raw_qty, 4)
+    qty = round(raw_qty, 3)
     return qty
 
 def main():
@@ -131,7 +131,7 @@ def main():
                 print(f"[{get_shanghai_time()}] [INFO] K线无方向，不开仓: {account_name}")
                 continue
             qty = calc_qty(entry_price)
-            print(f"[{get_shanghai_time()}] [INFO] {account_name} 本次计算下单数量: {qty:.4f}")
+            print(f"[{get_shanghai_time()}] [INFO] {account_name} 本次计算下单数量: {qty:.3f}")
             if qty < MIN_QTY:
                 print(f"[{get_shanghai_time()}] [INFO] 下单数量过小(<{MIN_QTY})，跳过: {account_name}")
                 continue
@@ -152,23 +152,33 @@ def main():
             except Exception as e:
                 order_result = {"error": str(e)}
                 print(f"[{get_shanghai_time()}] [ERROR] {account_name} 下单异常: {e}")
-            notification_service.send_trading_notification(
-                account_name=account_name,
-                inst_id=INST_ID,
-                signal_type=direction,
-                entry_price=entry_price,
-                size=qty,
-                margin=MARGIN,
-                take_profit_price=tp,
-                stop_loss_price=sl,
-                success=bool(order_result and order_result.get('code', '1') == '0'),
-                error_msg=order_result.get('msg', order_result.get('error', '')),
-                order_params=order_params,
-                order_result=order_result
+            # 组装Bark通知内容
+            cl_ord_id = order_params.get('clOrdId', '')
+            sh_time = get_shanghai_time()
+            title = "ETH 大振幅反转 v2 信号开仓"
+            # 错误信息优先取sMsg
+            sMsg = order_result.get('sMsg', '') if isinstance(order_result, dict) else ''
+            msg = order_result.get('msg', '') if isinstance(order_result, dict) else ''
+            code = order_result.get('code', '') if isinstance(order_result, dict) else ''
+            bark_content = (
+                f"账户: {account_name}\n"
+                f"交易标的: {INST_ID}\n"
+                f"信号类型: {direction}\n"
+                f"入场价格: {entry_price:.4f}\n"
+                f"委托数量: {qty:.3f}\n"
+                f"保证金: {MARGIN} USDT\n"
+                f"止盈价格: {tp:.4f}\n"
+                f"止损价格: {sl:.4f}\n"
+                f"客户订单ID: {cl_ord_id}\n"
+                f"时间: {sh_time}\n"
             )
+            if not (order_result and order_result.get('code', '1') == '0'):
+                bark_content += f"\n⚠️ 下单失败 ⚠️\n错误: {sMsg}\n"
+            bark_content += f"服务器响应代码: {code}\n服务器响应消息: {msg}"
+            notification_service.send_bark_notification(title, bark_content, group="OKX自动交易")
         else:
             qty = calc_qty(close)
-            print(f"[{get_shanghai_time()}] [INFO] {account_name} 当前无信号，理论下单数量: {qty:.4f}")
+            print(f"[{get_shanghai_time()}] [INFO] {account_name} 当前无信号，理论下单数量: {qty:.3f}")
 
 if __name__ == "__main__":
     main() 

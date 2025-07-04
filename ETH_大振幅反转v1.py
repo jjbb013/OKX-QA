@@ -70,15 +70,16 @@ def main():
             print(f"[{get_shanghai_time()}] [INFO] 使用假K线数据进行测试: {kline_data}")
         else:
             kline_data = get_kline_data(api_key, secret_key, passphrase, INST_ID, BAR, limit=LIMIT, flag=flag, suffix=suffix)
-        if not kline_data or len(kline_data) < 1:
-            print(f"[{get_shanghai_time()}] [ERROR] 未获取到K线数据: {account_name}")
+        if not kline_data or len(kline_data) < 2:
+            print(f"[{get_shanghai_time()}] [ERROR] 未获取到足够K线数据: {account_name}")
             continue
-        k = kline_data[0]
+        # 只用第二根K线做信号判断
+        k = kline_data[1]
         open_, high, low, close = float(k[1]), float(k[2]), float(k[3]), float(k[4])
         range_perc = (high - low) / low * 100
         is_green = close > open_
         is_red = close < open_
-        print(f"[{get_shanghai_time()}] [INFO] {account_name} 最新K线: open={open_}, close={close}, high={high}, low={low}, 振幅={range_perc:.2f}%")
+        print(f"[{get_shanghai_time()}] [INFO] {account_name} 用于判断的K线: open={open_}, close={close}, high={high}, low={low}, 振幅={range_perc:.2f}%")
         # 2. 检查未成交委托
         orders = get_orders_pending(trade_api, INST_ID)
         need_skip = False

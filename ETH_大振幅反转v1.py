@@ -35,7 +35,7 @@ ACCOUNT_SUFFIXES = ["", "1"]  # 支持多账户
 notification_service = NotificationService()
 
 # ========== 测试用假K线数据 ==========
-TEST_MODE = True  # 测试时为True，实盘请设为False
+TEST_MODE = False  # 测试时为True，实盘请设为False
 FAKE_KLINE_LONG = [
     ["1709999990000", "2650", "2660", "2645", "2650", "100", "100", "100", "1"],   # new
     ["1710000000000", "2650", "2680", "2640", "2654", "100", "100", "100", "1"],  # pre

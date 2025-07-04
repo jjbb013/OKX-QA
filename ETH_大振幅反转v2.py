@@ -34,6 +34,13 @@ ACCOUNT_SUFFIXES = ["", "1"]  # 支持多账户
 
 notification_service = NotificationService()
 
+# ========== 测试用假K线数据 ==========
+TEST_MODE = True  # 测试时为True，实盘请设为False
+FAKE_KLINE_LONG = [
+    ["1710000000000", "2650", "2660", "2640", "2654", "100", "100", "100", "1"],  # 最新K线，做多信号
+    ["1709999990000", "2650", "2660", "2645", "2650", "100", "100", "100", "1"]   # 前一根K线
+]
+
 def calc_qty(entry_price):
     # 动态计算下单数量（保证金*杠杆/合约面值/价格）
     trade_value = MARGIN * LEVERAGE
@@ -57,7 +64,11 @@ def main():
             print(f"[{get_shanghai_time()}] [ERROR] API初始化失败: {account_name} {e}")
             continue
         # 1. 获取K线
-        kline_data = get_kline_data(api_key, secret_key, passphrase, INST_ID, BAR, limit=LIMIT, flag=flag, suffix=suffix)
+        if TEST_MODE:
+            kline_data = FAKE_KLINE_LONG
+            print(f"[{get_shanghai_time()}] [INFO] 使用假K线数据进行测试: {kline_data}")
+        else:
+            kline_data = get_kline_data(api_key, secret_key, passphrase, INST_ID, BAR, limit=LIMIT, flag=flag, suffix=suffix)
         if not kline_data or len(kline_data) < 1:
             print(f"[{get_shanghai_time()}] [ERROR] 未获取到K线数据: {account_name}")
             continue

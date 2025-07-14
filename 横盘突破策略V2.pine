@@ -1,0 +1,128 @@
+//@version=6
+strategy("BTC横盘突破策略(强化版)", overlay=true, 
+     default_qty_type=strategy.percent_of_equity, 
+     default_qty_value=10, 
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, 
+     commission_value=0.05)
+
+// ===== 用户可调参数 =====
+// 1. 信号过滤参数
+lookbackPeriod   = input.int(8, "横盘观察周期", minval=5)
+smaPeriod        = input.int(60, "趋势过滤SMA周期")
+adxThreshold     = input.int(25, "ADX趋势强度阈值")
+enablePressure   = input.bool(true, "启用压力位验证")
+
+// 2. 仓位管理参数
+atrPeriod        = input.int(14, "ATR周期")
+volatilityThresh = input.float(0.016, "波动率分层阈值")
+maxRiskPct       = input.float(10.0, "单笔最大风险比例(%)") / 100
+
+// 3. 止盈止损参数
+takeProfitPct    = input.float(1.0, "基础止盈比例(%)") / 100
+stopLossPct      = input.float(2.6, "基础止损比例(%)") / 100
+trailOffsetPct   = input.float(0.5, "移动止损回撤比例(%)") / 100
+
+// ===== 核心模块1：信号质量强化 =====
+// 1.1 基础突破信号
+highRange = ta.highest(high[2], lookbackPeriod)
+lowRange  = ta.lowest(low[2], lookbackPeriod)
+upperBreak = close > highRange and close[1] > highRange
+lowerBreak = close < lowRange and close[1] < lowRange
+
+// 1.2 趋势过滤器 (SMA+ADX)
+sma60 = ta.sma(close, smaPeriod)
+[diplus, diminus, adxVal] = ta.dmi(14, 14)
+trendFilter = close > sma60  // 多头趋势条件
+adxFilter = adxVal < adxThreshold  // 仅震荡市交易
+
+// 1.3 压力位验证
+weeklyHigh = request.security(syminfo.tickerid, "W", ta.highest(high, 20)[1])
+weeklyLow = request.security(syminfo.tickerid, "W", ta.lowest(low, 20)[1])
+validUpperBreak = upperBreak and (enablePressure ? (math.abs(close - weeklyHigh) / close < 0.01) : true)
+validLowerBreak = lowerBreak and (enablePressure ? (math.abs(close - weeklyLow) / close < 0.01) : true)
+
+// 1.4 最终信号合成
+longSignal = validUpperBreak and trendFilter and adxFilter
+shortSignal = validLowerBreak and (not trendFilter) and adxFilter
+
+// ===== 核心模块2：动态仓位管理 =====
+// 2.1 波动率分层计算
+atrVal = ta.atr(atrPeriod)
+volatilityRatio = atrVal / close
+positionSize = 
+     volatilityRatio < volatilityThresh * 0.7 ? maxRiskPct * 1.3 :
+     volatilityRatio > volatilityThresh * 1.3 ? maxRiskPct * 0.5 :
+     maxRiskPct
+
+// 2.2 动态止损比例
+dynamicStopPct = 
+     volatilityRatio > volatilityThresh * 1.5 ? stopLossPct * 1.2 :
+     volatilityRatio < volatilityThresh * 0.8 ? stopLossPct * 0.8 :
+     stopLossPct
+
+// ===== 核心模块3：分阶止盈+移动止损 =====
+// 3.1 移动止损逻辑
+var float trailStop = na
+if longSignal
+    trailStop := close * (1 - dynamicStopPct)
+else if strategy.position_size > 0
+    trailStop := math.max(trailStop, close * (1 - trailOffsetPct))
+
+// 3.2 分阶止盈规则
+if strategy.position_size > 0
+    // 第一目标：1%止盈40%
+    strategy.exit("TP1", "LONG", qty_percent=40, limit=strategy.position_avg_price * (1 + takeProfitPct))
+    // 第二目标：移动止盈30%
+    strategy.exit("TP2", "LONG", qty_percent=30, trail_price=close * (1 - trailOffsetPct), trail_offset=trailOffsetPct)
+    // 剩余仓位：跌破移动止损出场
+    strategy.exit("TP3", "LONG", stop=trailStop)
+
+// ===== 交易执行 =====
+if longSignal
+    strategy.entry("LONG", strategy.long, qty=positionSize)
+if shortSignal
+    strategy.entry("SHORT", strategy.short, qty=positionSize)
+
+// ===== 可视化增强 =====
+plot(highRange, "区间上轨", color=color.blue, linewidth=2)
+plot(lowRange, "区间下轨", color=color.red, linewidth=2)
+plot(sma60, "趋势SMA", color=color.orange, linewidth=1)
+
+// 填充横盘区间
+fill(plot(highRange), plot(lowRange), title="横盘区间", color=color.new(color.blue, 90))
+
+// 标记突破信号
+plotshape(longSignal, title="向上突破", text="↑突破", location=location.belowbar, color=color.green, style=shape.labelup, size=size.normal)
+plotshape(shortSignal, title="向下突破", text="↓突破", location=location.abovebar, color=color.red, style=shape.labeldown, size=size.normal)
+
+// ===== 信息面板 =====
+var table info_table = table.new(position.top_right, 2, 8, bgcolor=color.white, border_width=1)
+if barstate.islast
+    table.cell(info_table, 0, 0, "策略信息", text_color=color.black, bgcolor=color.gray)
+    table.cell(info_table, 1, 0, "BTC横盘突破V2", text_color=color.black)
+    
+    table.cell(info_table, 0, 1, "观察周期", text_color=color.black)
+    table.cell(info_table, 1, 1, str.tostring(lookbackPeriod) + "根K线", text_color=color.black)
+    
+    table.cell(info_table, 0, 2, "止盈", text_color=color.black)
+    table.cell(info_table, 1, 2, str.tostring(takeProfitPct * 100) + "%", text_color=color.green)
+    
+    table.cell(info_table, 0, 3, "止损", text_color=color.black)
+    table.cell(info_table, 1, 3, str.tostring(dynamicStopPct * 100, "#.##") + "%", text_color=color.red)
+    
+    table.cell(info_table, 0, 4, "ADX", text_color=color.black)
+    table.cell(info_table, 1, 4, str.tostring(adxVal, "#.##"), text_color=adxVal < adxThreshold ? color.green : color.red)
+    
+    table.cell(info_table, 0, 5, "趋势状态", text_color=color.black)
+    table.cell(info_table, 1, 5, trendFilter ? "多头" : "空头", text_color=trendFilter ? color.green : color.red)
+    
+    table.cell(info_table, 0, 6, "上轨", text_color=color.black)
+    table.cell(info_table, 1, 6, str.tostring(highRange, "#.####"), text_color=color.red)
+    
+    table.cell(info_table, 0, 7, "下轨", text_color=color.black)
+    table.cell(info_table, 1, 7, str.tostring(lowRange, "#.####"), text_color=color.green)
+
+// ===== 警报条件 =====
+alertcondition(longSignal, title="做多信号", message="BTC横盘突破策略V2 - 做多信号")
+alertcondition(shortSignal, title="做空信号", message="BTC横盘突破策略V2 - 做空信号") 

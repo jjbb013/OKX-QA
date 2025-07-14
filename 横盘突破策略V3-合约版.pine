@@ -1,0 +1,228 @@
+//@version=6
+strategy("横盘突破策略V3-合约版", overlay=true, 
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1, 
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, 
+     commission_value=0.05,
+     margin_long=100, 
+     margin_short=100)
+
+// ========== 合约交易参数 ==========
+leverage = input.int(10, "杠杆倍数", minval=1, maxval=100)
+contract_size = input.float(0.01, "合约面值", tooltip="BTC-USDT-SWAP每张合约0.01BTC")
+enable_funding_filter = input.bool(true, "启用资金费率过滤")
+
+// ========== 信号过滤参数 ==========
+lookback_period = input.int(3, title="观察周期", minval=2, maxval=15)
+volume_confirm = input.bool(false, title="成交量确认")
+take_profit_percent = input.float(0.5, title="止盈百分比", minval=0.1, maxval=5.0, step=0.1)
+stop_loss_percent = input.float(1.0, title="止损百分比", minval=0.1, maxval=5.0, step=0.1)
+
+// ========== 过滤条件设置 ==========
+enable_volatility_filter = input.bool(false, title="启用波动率过滤")
+enable_trend_filter = input.bool(false, title="启用趋势过滤")
+atr_period = input.int(10, title="ATR周期", minval=5, maxval=30)
+sma_period = input.int(30, title="SMA周期", minval=10, maxval=100)
+volatility_threshold = input.float(0.008, title="波动率阈值", minval=0.001, maxval=0.05, step=0.001)
+
+// ========== 风控设置 ==========
+risk_management = input.string("固定比例", "风控模式", options=["固定比例", "波动率调整"])
+atr_multiplier = input.float(2.5, title="ATR倍数", minval=1.0, maxval=5.0, step=0.1)
+
+// ========== 信号强度设置 ==========
+enable_signal_strength = input.bool(false, title="启用信号强度评分")
+min_signal_score = input.int(1, title="最小信号分数", minval=1, maxval=5)
+
+// ========== 成交量质量设置 ==========
+volume_ma_period = input.int(15, title="成交量均线周期", minval=5, maxval=30)
+volume_breakout_mult = input.float(1.0, title="成交量突破倍数", minval=0.5, maxval=2.0, step=0.1)
+
+// ========== 布林带设置 ==========
+bb_length = input.int(15, title="布林带周期", minval=10, maxval=30)
+bb_mult = input.float(1.5, title="布林带倍数", minval=1.0, maxval=3.0, step=0.1)
+
+// ========== KDJ设置 ==========
+k_period = input.int(9, title="K周期", minval=5, maxval=20)
+d_period = input.int(3, title="D周期", minval=2, maxval=10)
+j_period = input.int(3, title="J周期", minval=2, maxval=10)
+
+// ========== 计算逻辑 ==========
+// 获取前N根K线的最高点和最低点
+high_range = ta.highest(high[2], lookback_period)
+low_range = ta.lowest(low[2], lookback_period)
+
+// 检查最新2根K线是否突破
+k1_high_break = high > high_range
+k1_low_break = low < low_range
+k2_high_break = high[1] > high_range
+k2_low_break = low[1] < low_range
+
+// 突破确认：K1和K2都突破同一方向
+bullish_break = k1_high_break and k2_high_break
+bearish_break = k1_low_break and k2_low_break
+
+// ========== 成交量质量过滤 ==========
+volume_breakout = volume > ta.sma(volume, volume_ma_period) * volume_breakout_mult
+volume_condition = volume_confirm ? (volume > volume[2] and volume_breakout) : true
+
+// ========== 布林带计算 ==========
+bb_basis = ta.sma(close, bb_length)
+bb_dev = bb_mult * ta.stdev(close, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+
+// 布林带突破确认
+bb_bullish = close > bb_upper and close[1] <= bb_upper[1]
+bb_bearish = close < bb_lower and close[1] >= bb_lower[1]
+
+// ========== KDJ计算 ==========
+k = ta.stoch(close, high, low, k_period)
+d = ta.sma(k, d_period)
+j = 3 * k - 2 * d
+
+// KDJ过滤条件
+kdj_bullish = k > d and k < 85 and d < 85
+kdj_bearish = k < d and k > 15 and d > 15
+
+// ========== 信号强度评分 ==========
+signal_strength_long = 0
+signal_strength_short = 0
+
+if bullish_break
+    signal_strength_long := signal_strength_long + 1  // 基础突破信号
+    signal_strength_long := signal_strength_long + (bb_bullish ? 1 : 0)  // 布林带确认
+    signal_strength_long := signal_strength_long + (kdj_bullish ? 1 : 0)  // KDJ确认
+    signal_strength_long := signal_strength_long + (volume_breakout ? 1 : 0)  // 成交量确认
+
+if bearish_break
+    signal_strength_short := signal_strength_short + 1  // 基础突破信号
+    signal_strength_short := signal_strength_short + (bb_bearish ? 1 : 0)  // 布林带确认
+    signal_strength_short := signal_strength_short + (kdj_bearish ? 1 : 0)  // KDJ确认
+    signal_strength_short := signal_strength_short + (volume_breakout ? 1 : 0)  // 成交量确认
+
+// ========== 合约交易特殊过滤 ==========
+// 资金费率过滤
+funding_time = hour == 0 or hour == 8 or hour == 16
+avoid_funding = enable_funding_filter ? not funding_time : true
+// 如果还是没有交易，可以完全移除资金费率过滤
+// avoid_funding = true
+
+// ========== 过滤条件 ==========
+avoidHighVolatility = enable_volatility_filter ? (ta.atr(atr_period) / close) < volatility_threshold : true
+longTrendFilter = enable_trend_filter ? close > ta.sma(close, sma_period) : true
+shortTrendFilter = enable_trend_filter ? close < ta.sma(close, sma_period) : true
+
+// ========== 开仓条件 ==========
+// 基础条件（简化）
+base_long_condition = bullish_break and volume_condition and avoid_funding
+base_short_condition = bearish_break and volume_condition and avoid_funding
+
+// 增强条件
+enhanced_long_condition = enable_signal_strength ? signal_strength_long >= min_signal_score : true
+enhanced_short_condition = enable_signal_strength ? signal_strength_short >= min_signal_score : true
+
+// 最终开仓条件
+long_condition = base_long_condition and enhanced_long_condition
+short_condition = base_short_condition and enhanced_short_condition
+
+// ========== 动态风控计算 ==========
+// 动态止损计算
+dynamic_stop_loss = risk_management == "波动率调整" ? math.min(stop_loss_percent, ta.atr(atr_period) / close * 100 * atr_multiplier) : stop_loss_percent
+
+// 合约数量计算
+contract_qty = math.floor((strategy.equity * 0.1 * leverage) / (close * contract_size))
+contract_qty := math.max(contract_qty, 1)  // 最少1张合约
+
+// ========== 止盈止损价格 ==========
+long_tp = strategy.position_avg_price * (1 + take_profit_percent / 100)
+long_sl = strategy.position_avg_price * (1 - dynamic_stop_loss / 100)
+short_tp = strategy.position_avg_price * (1 - take_profit_percent / 100)
+short_sl = strategy.position_avg_price * (1 + dynamic_stop_loss / 100)
+
+// ========== 移动止损 ==========
+var float trail_stop = na
+if long_condition
+    trail_stop := close * (1 - dynamic_stop_loss / 100)
+else if strategy.position_size > 0
+    trail_stop := math.max(trail_stop, close * (1 - 0.2 / 100))  // 0.2%移动止损
+
+// ========== 执行交易 ==========
+if long_condition
+    strategy.entry("做多", strategy.long, qty=1)
+    strategy.exit("做多平仓", "做多", limit=long_tp, stop=long_sl)
+
+if short_condition
+    strategy.entry("做空", strategy.short, qty=1)
+    strategy.exit("做空平仓", "做空", limit=short_tp, stop=short_sl)
+
+// ========== 绘制图形 ==========
+// 绘制观察区间
+plot(high_range, title="上轨", color=color.red, linewidth=2)
+plot(low_range, title="下轨", color=color.green, linewidth=2)
+
+// 填充观察区间
+fill(plot(high_range), plot(low_range), title="横盘区间", color=color.new(color.blue, 90))
+
+// 绘制布林带
+plot(bb_upper, title="布林带上轨", color=color.new(color.blue, 50), linewidth=1)
+plot(bb_lower, title="布林带下轨", color=color.new(color.blue, 50), linewidth=1)
+plot(bb_basis, title="布林带中轨", color=color.new(color.orange, 50), linewidth=1)
+
+// 标记突破点
+plotshape(bullish_break, title="向上突破", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.small)
+plotshape(bearish_break, title="向下突破", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.small)
+
+// 标记开仓点
+plotshape(long_condition, title="做多开仓", location=location.belowbar, color=color.green, style=shape.circle, size=size.normal)
+plotshape(short_condition, title="做空开仓", location=location.abovebar, color=color.red, style=shape.circle, size=size.normal)
+
+// 标记基础突破信号（用于调试）
+plotshape(bullish_break, title="基础向上突破", location=location.belowbar, color=color.lime, style=shape.triangleup, size=size.small)
+plotshape(bearish_break, title="基础向下突破", location=location.abovebar, color=color.maroon, style=shape.triangledown, size=size.small)
+
+// 标记资金费率时间
+plotshape(funding_time, title="资金费率时间", location=location.top, color=color.yellow, style=shape.circle, size=size.tiny)
+
+// ========== 显示信息 ==========
+var table info_table = table.new(position.top_right, 2, 12, bgcolor=color.white, border_width=1)
+if barstate.islast
+    table.cell(info_table, 0, 0, "策略信息", text_color=color.black, bgcolor=color.gray)
+    table.cell(info_table, 1, 0, "横盘突破V3-合约版", text_color=color.black)
+    
+    table.cell(info_table, 0, 1, "杠杆倍数", text_color=color.black)
+    table.cell(info_table, 1, 1, str.tostring(leverage) + "x", text_color=color.blue)
+    
+    table.cell(info_table, 0, 2, "观察周期", text_color=color.black)
+    table.cell(info_table, 1, 2, str.tostring(lookback_period) + "根K线", text_color=color.black)
+    
+    table.cell(info_table, 0, 3, "止盈", text_color=color.black)
+    table.cell(info_table, 1, 3, str.tostring(take_profit_percent) + "%", text_color=color.green)
+    
+    table.cell(info_table, 0, 4, "止损", text_color=color.black)
+    table.cell(info_table, 1, 4, str.tostring(dynamic_stop_loss, "#.##") + "%", text_color=color.red)
+    
+    table.cell(info_table, 0, 5, "合约数量", text_color=color.black)
+    table.cell(info_table, 1, 5, str.tostring(contract_qty) + "张", text_color=color.blue)
+    
+    table.cell(info_table, 0, 6, "风控模式", text_color=color.black)
+    table.cell(info_table, 1, 6, risk_management, text_color=color.blue)
+    
+    table.cell(info_table, 0, 7, "信号强度", text_color=color.black)
+    table.cell(info_table, 1, 7, enable_signal_strength ? "启用" : "禁用", text_color=enable_signal_strength ? color.green : color.gray)
+    
+    table.cell(info_table, 0, 8, "波动率过滤", text_color=color.black)
+    table.cell(info_table, 1, 8, enable_volatility_filter ? "启用" : "禁用", text_color=enable_volatility_filter ? color.green : color.gray)
+    
+    table.cell(info_table, 0, 9, "趋势过滤", text_color=color.black)
+    table.cell(info_table, 1, 9, enable_trend_filter ? "启用" : "禁用", text_color=enable_trend_filter ? color.green : color.gray)
+    
+    table.cell(info_table, 0, 10, "上轨", text_color=color.black)
+    table.cell(info_table, 1, 10, str.tostring(high_range, "#.####"), text_color=color.red)
+    
+    table.cell(info_table, 0, 11, "下轨", text_color=color.black)
+    table.cell(info_table, 1, 11, str.tostring(low_range, "#.####"), text_color=color.green)
+
+// ========== 警报条件 ==========
+alertcondition(long_condition, title="做多信号", message="横盘突破策略V3-合约版 - 做多信号")
+alertcondition(short_condition, title="做空信号", message="横盘突破策略V3-合约版 - 做空信号") 

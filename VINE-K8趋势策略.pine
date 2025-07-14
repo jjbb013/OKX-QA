@@ -1,0 +1,165 @@
+//@version=6
+strategy("VINE K8趋势策略 V3", overlay=true, 
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1, 
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, 
+     commission_value=0.05,
+     margin_long=100, 
+     margin_short=100)
+
+// ========== 策略参数 ==========
+// 交易标的参数
+INST_ID = input.string("VINE-USDT-SWAP", title="交易标的", group="交易设置")
+BAR = input.string("5m", title="K线周期", group="交易设置")
+LIMIT = input.int(8, title="限制数量", minval=1, group="交易设置")
+LEVERAGE = input.int(20, title="杠杆倍数", minval=1, maxval=100, group="交易设置")
+CONTRACT_FACE_VALUE = input.float(10, title="合约面值(美元)", minval=0.1, group="交易设置")
+
+// 策略参数
+MARGIN = input.float(5, title="保证金(USDT)", minval=1, group="交易设置")
+TAKE_PROFIT_PERCENT = input.float(0.02, title="止盈百分比", minval=0.001, maxval=1, step=0.001, group="风控设置")
+STOP_LOSS_PERCENT = input.float(0.015, title="止损百分比", minval=0.001, maxval=1, step=0.001, group="风控设置")
+MIN_BODY1 = input.float(0.009, title="K0最小实体振幅", minval=0.001, maxval=0.1, step=0.001, group="信号过滤")
+MAX_BODY1 = input.float(0.035, title="K0最大实体振幅", minval=0.001, maxval=0.1, step=0.001, group="信号过滤")
+MAX_TOTAL_RANGE = input.float(0.02, title="K1~K4总振幅上限", minval=0.001, maxval=0.1, step=0.001, group="信号过滤")
+
+// ========== 用户可调参数 ==========
+enable_strategy = input.bool(true, title="启用策略", group="基础设置")
+show_debug_info = input.bool(true, title="显示调试信息", group="基础设置")
+
+// ========== EMA趋势过滤参数 ==========
+ema21 = input.int(21, title="EMA21周期", minval=1, group="趋势过滤")
+ema60 = input.int(60, title="EMA60周期", minval=1, group="趋势过滤")
+ema144 = input.int(144, title="EMA144周期", minval=1, group="趋势过滤")
+enable_trend_filter = input.bool(true, title="启用趋势过滤", group="趋势过滤")
+
+// ========== 计算EMA ==========
+ema21_value = ta.ema(close, ema21)
+ema60_value = ta.ema(close, ema60)
+ema144_value = ta.ema(close, ema144)
+
+// ========== 趋势判断 ==========
+// 多头趋势：EMA21 > EMA60 > EMA144
+bullish_trend = ema21_value > ema60_value and ema60_value > ema144_value
+// 空头趋势：EMA21 < EMA60 < EMA144
+bearish_trend = ema21_value < ema60_value and ema60_value < ema144_value
+
+// ========== K线分析函数 ==========
+analyze_kline() =>
+    // 获取K0数据 (当前K线)
+    o0 = open
+    c0 = close
+    body0 = math.abs(c0 - o0) / o0
+    k0_is_long = c0 > o0
+    k0_is_short = c0 < o0
+    
+    // 获取K1数据 (前一根K线)
+    o1 = open[1]
+    c1 = close[1]
+    k1_is_long = c1 > o1
+    k1_is_short = c1 < o1
+    
+    // 判断K0和K1是否同方向
+    both_long = k0_is_long and k1_is_long
+    both_short = k0_is_short and k1_is_short
+    same_direction = both_long or both_short
+    
+    // 确定开仓方向
+    is_long = both_long
+    is_short = both_short
+    
+    // 计算K1~K4总振幅 (前4根K线) 来观察
+    total_range = 0.0
+    for i = 1 to 5
+        oi = open[i]
+        ci = close[i]
+        rng = math.abs(ci - oi) / oi
+        total_range := total_range + rng
+    
+    // 判断入场条件：振幅符合 + 方向一致
+    can_entry = (body0 > MIN_BODY1) and (body0 < MAX_BODY1) and (total_range < MAX_TOTAL_RANGE) and same_direction
+    entry_price = c0
+    
+    // 使用条件表达式直接确定信号
+    signal = can_entry ? (is_long ? "LONG" : (is_short ? "SHORT" : "")) : ""
+    
+    [signal, entry_price, body0, total_range, is_long, is_short, can_entry, same_direction, k0_is_long, k0_is_short, k1_is_long, k1_is_short]
+
+// ========== 执行分析 ==========
+[signal, entry_price, body0, total_range, is_long, is_short, can_entry, same_direction, k0_is_long, k0_is_short, k1_is_long, k1_is_short] = analyze_kline()
+
+// ========== 交易信号（加入趋势过滤） ==========
+long_condition = signal == "LONG" and enable_strategy and (not enable_trend_filter or bullish_trend)
+short_condition = signal == "SHORT" and enable_strategy and (not enable_trend_filter or bearish_trend)
+
+// ========== 计算止盈止损价格 ==========
+long_tp = strategy.position_avg_price * (1 + TAKE_PROFIT_PERCENT)
+long_sl = strategy.position_avg_price * (1 - STOP_LOSS_PERCENT)
+short_tp = strategy.position_avg_price * (1 - TAKE_PROFIT_PERCENT)
+short_sl = strategy.position_avg_price * (1 + STOP_LOSS_PERCENT)
+
+// ========== 交易数量设置 ==========
+trade_qty = input.int(3000, title="交易数量(张)", minval=1, group="交易设置")
+
+// ========== 执行交易 ==========
+if long_condition
+    strategy.entry("LONG", strategy.long, qty=trade_qty)
+    strategy.exit("LONG_TP_SL", "LONG", limit=long_tp, stop=long_sl)
+
+if short_condition
+    strategy.entry("SHORT", strategy.short, qty=trade_qty)
+    strategy.exit("SHORT_TP_SL", "SHORT", limit=short_tp, stop=short_sl)
+
+// ========== 绘制图形 ==========
+// 绘制EMA线
+plot(ema21_value, title="EMA21", color=color.blue, linewidth=1)
+plot(ema60_value, title="EMA60", color=color.orange, linewidth=1)
+plot(ema144_value, title="EMA144", color=color.red, linewidth=1)
+
+
+// 标记交易信号
+plotshape(long_condition, title="做多信号", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.normal)
+plotshape(short_condition, title="做空信号", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.normal)
+
+
+// 标记趋势状态
+plotshape(bullish_trend, title="多头趋势", location=location.bottom, color=color.green, style=shape.flag, size=size.tiny)
+plotshape(bearish_trend, title="空头趋势", location=location.bottom, color=color.red, style=shape.flag, size=size.tiny)
+
+// 标记K0和K1方向一致性
+plotshape(same_direction and k0_is_long, title="K0K1同向多头", location=location.top, color=color.green, style=shape.diamond, size=size.tiny)
+plotshape(same_direction and k0_is_short, title="K0K1同向空头", location=location.top, color=color.red, style=shape.diamond, size=size.tiny)
+plotshape(not same_direction, title="K0K1方向不一致", location=location.top, color=color.gray, style=shape.xcross, size=size.tiny)
+
+// ========== 显示信息面板 ==========
+var table info_table = table.new(position.top_right, 2, 8, bgcolor=color.white, border_width=1)
+if barstate.islast and show_debug_info
+    table.cell(info_table, 0, 0, "策略信息", text_color=color.black, bgcolor=color.gray)
+    table.cell(info_table, 1, 0, "VINE K7趋势策略V3", text_color=color.black)
+    
+    table.cell(info_table, 0, 1, "K0方向", text_color=color.black)
+    table.cell(info_table, 1, 1, k0_is_long ? "多头" : (k0_is_short ? "空头" : "平盘"), text_color=k0_is_long ? color.green : (k0_is_short ? color.red : color.gray))
+    
+    table.cell(info_table, 0, 2, "K1方向", text_color=color.black)
+    table.cell(info_table, 1, 2, k1_is_long ? "多头" : (k1_is_short ? "空头" : "平盘"), text_color=k1_is_long ? color.green : (k1_is_short ? color.red : color.gray))
+    
+    table.cell(info_table, 0, 3, "方向一致性", text_color=color.black)
+    table.cell(info_table, 1, 3, same_direction ? "一致" : "不一致", text_color=same_direction ? color.green : color.red)
+    
+    table.cell(info_table, 0, 4, "K0振幅", text_color=color.black)
+    table.cell(info_table, 1, 4, str.tostring(body0 * 100, "#.##") + "%", text_color=body0 > MIN_BODY1 and body0 < MAX_BODY1 ? color.green : color.red)
+    
+    table.cell(info_table, 0, 5, "K1~K4总振幅", text_color=color.black)
+    table.cell(info_table, 1, 5, str.tostring(total_range * 100, "#.##") + "%", text_color=total_range < MAX_TOTAL_RANGE ? color.green : color.red)
+    
+    table.cell(info_table, 0, 6, "入场条件", text_color=color.black)
+    table.cell(info_table, 1, 6, can_entry ? "符合" : "不符合", text_color=can_entry ? color.green : color.red)
+    
+    table.cell(info_table, 0, 7, "交易信号", text_color=color.black)
+    table.cell(info_table, 1, 7, signal == "LONG" ? "做多" : (signal == "SHORT" ? "做空" : "无信号"), text_color=signal == "LONG" ? color.green : (signal == "SHORT" ? color.red : color.gray))
+
+// ========== 警报条件 ==========
+alertcondition(long_condition, title="做多信号", message="VINE K7趋势策略 - 做多信号")
+alertcondition(short_condition, title="做空信号", message="VINE K7趋势策略 - 做空信号")
+

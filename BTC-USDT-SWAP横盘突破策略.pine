@@ -1,0 +1,168 @@
+//@version=6
+strategy("BTC-USDT-SWAP横盘突破策略", overlay=true, 
+     default_qty_type=strategy.fixed, 
+     default_qty_value=1, 
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, 
+     commission_value=0.05,
+     margin_long=100, 
+     margin_short=100)
+
+// ===== 用户可调参数 =====
+// 1. 信号过滤参数
+lookbackPeriod   = input.int(2, "横盘观察周期", minval=1, maxval=5)  // 极度缩短观察周期
+smaPeriod        = input.int(10, "趋势过滤SMA周期")  // 极度缩短SMA周期
+adxThreshold     = input.int(40, "ADX趋势强度阈值")  // 极度放宽ADX条件
+enablePressure   = input.bool(false, "启用压力位验证")  // 关闭压力位验证
+
+// 2. 仓位管理参数（针对合约优化）
+atrPeriod        = input.int(5, "ATR周期")  // 极度缩短ATR周期
+volatilityThresh = input.float(0.005, "波动率分层阈值")  // 极度降低波动率阈值
+maxRiskPct       = input.float(15.0, "单笔最大风险比例(%)") / 100  // 极度增加风险比例
+contractSize     = input.float(0.01, "合约面值(BTC)")  // BTC-USDT-SWAP每张合约0.01BTC
+
+// 3. 止盈止损参数（针对合约优化）
+takeProfitPct    = input.float(0.4, "基础止盈比例(%)") / 100  // 极度降低止盈
+stopLossPct      = input.float(0.8, "基础止损比例(%)") / 100  // 极度降低止损
+trailOffsetPct   = input.float(0.1, "移动止损回撤比例(%)") / 100  // 极度紧的移动止损
+
+// 4. 合约交易特殊参数
+leverage         = input.int(10, "杠杆倍数", minval=1, maxval=100)
+enableFunding   = input.bool(true, "考虑资金费率")
+
+// ===== 核心模块1：信号质量强化 =====
+// 1.1 基础突破信号（放宽条件）
+highRange = ta.highest(high[2], lookbackPeriod)
+lowRange  = ta.lowest(low[2], lookbackPeriod)
+// 放宽突破条件：只需要当前K线突破，不需要连续两根K线
+upperBreak = close > highRange
+lowerBreak = close < lowRange
+
+// 1.2 趋势过滤器 (SMA+ADX)
+sma60 = ta.sma(close, smaPeriod)
+[diplus, diminus, adxVal] = ta.dmi(14, 14)
+trendFilter = close > sma60  // 多头趋势条件
+adxFilter = adxVal < adxThreshold  // 仅震荡市交易
+
+// 1.3 压力位验证（简化）
+weeklyHigh = request.security(syminfo.tickerid, "W", ta.highest(high, 20)[1])
+weeklyLow = request.security(syminfo.tickerid, "W", ta.lowest(low, 20)[1])
+validUpperBreak = upperBreak  // 移除压力位验证
+validLowerBreak = lowerBreak  // 移除压力位验证
+
+// 1.4 合约交易特殊过滤（简化）
+// 避免在资金费率结算时间附近开仓
+fundingTime = hour == 0 or hour == 8 or hour == 16
+avoidFunding = enableFunding ? not fundingTime : true
+// 如果还是没有信号，可以完全移除资金费率过滤
+// avoidFunding = true
+
+// 1.5 15分钟级别信号优化
+// 添加成交量确认
+volumeConfirm = volume > ta.sma(volume, 20) * 1.1  // 成交量突破确认
+
+// 1.6 最终信号合成（极度放宽条件）
+// 只保留基础突破，移除所有其他过滤
+longSignal = validUpperBreak
+shortSignal = validLowerBreak
+
+// ===== 核心模块2：合约仓位管理 =====
+// 2.1 波动率分层计算
+atrVal = ta.atr(atrPeriod)
+volatilityRatio = atrVal / close
+positionSize = 
+     volatilityRatio < volatilityThresh * 0.7 ? maxRiskPct * 1.2 :  // 低波动率：6%
+     volatilityRatio > volatilityThresh * 1.3 ? maxRiskPct * 0.3 :  // 高波动率：1.5%
+     maxRiskPct  // 正常波动率：5%
+
+// 2.2 动态止损比例（合约交易更严格）
+dynamicStopPct = 
+     volatilityRatio > volatilityThresh * 1.5 ? stopLossPct * 1.1 :  // 高波动率：2.2%
+     volatilityRatio < volatilityThresh * 0.8 ? stopLossPct * 0.9 :  // 低波动率：1.8%
+     stopLossPct  // 正常波动率：2.0%
+
+// 2.3 合约数量计算（简化）
+contractQty = 1  // 固定每次交易1张合约
+
+// ===== 核心模块3：合约止盈止损 =====
+// 3.1 移动止损逻辑
+var float trailStop = na
+if longSignal
+    trailStop := close * (1 - dynamicStopPct)
+else if strategy.position_size > 0
+    trailStop := math.max(trailStop, close * (1 - trailOffsetPct))
+
+// 3.2 分阶止盈规则（合约交易更保守）
+if strategy.position_size > 0
+    // 第一目标：1%止盈50%
+    strategy.exit("TP1", "LONG", qty_percent=50, limit=strategy.position_avg_price * (1 + takeProfitPct))
+    // 第二目标：移动止盈30%
+    strategy.exit("TP2", "LONG", qty_percent=30, trail_price=close * (1 - trailOffsetPct), trail_offset=trailOffsetPct)
+    // 剩余仓位：跌破移动止损出场
+    strategy.exit("TP3", "LONG", stop=trailStop)
+
+// ===== 交易执行 =====
+if longSignal
+    strategy.entry("LONG", strategy.long)
+if shortSignal
+    strategy.entry("SHORT", strategy.short)
+
+// ===== 可视化增强 =====
+plot(highRange, "区间上轨", color=color.blue, linewidth=2)
+plot(lowRange, "区间下轨", color=color.red, linewidth=2)
+plot(sma60, "趋势SMA", color=color.orange, linewidth=1)
+
+// 填充横盘区间
+fill(plot(highRange), plot(lowRange), title="横盘区间", color=color.new(color.blue, 90))
+
+// 标记突破信号
+plotshape(longSignal, title="向上突破", text="↑突破", location=location.belowbar, color=color.green, style=shape.labelup, size=size.normal)
+plotshape(shortSignal, title="向下突破", text="↓突破", location=location.abovebar, color=color.red, style=shape.labeldown, size=size.normal)
+
+// 标记基础突破信号（用于调试）
+plotshape(upperBreak, title="基础向上突破", location=location.belowbar, color=color.lime, style=shape.triangleup, size=size.small)
+plotshape(lowerBreak, title="基础向下突破", location=location.abovebar, color=color.maroon, style=shape.triangledown, size=size.small)
+
+// 标记观察区间（用于调试）
+plotshape(close > highRange, title="突破上轨", location=location.belowbar, color=color.cyan, style=shape.circle, size=size.tiny)
+plotshape(close < lowRange, title="突破下轨", location=location.abovebar, color=color.purple, style=shape.circle, size=size.tiny)
+
+// 标记资金费率时间
+plotshape(fundingTime, title="资金费率时间", location=location.top, color=color.yellow, style=shape.circle, size=size.tiny)
+
+// ===== 信息面板 =====
+var table info_table = table.new(position.top_right, 2, 10, bgcolor=color.white, border_width=1)
+if barstate.islast
+    table.cell(info_table, 0, 0, "策略信息", text_color=color.black, bgcolor=color.gray)
+    table.cell(info_table, 1, 0, "BTC-USDT-SWAP", text_color=color.black)
+    
+    table.cell(info_table, 0, 1, "观察周期", text_color=color.black)
+    table.cell(info_table, 1, 1, str.tostring(lookbackPeriod) + "根K线", text_color=color.black)
+    
+    table.cell(info_table, 0, 2, "杠杆倍数", text_color=color.black)
+    table.cell(info_table, 1, 2, str.tostring(leverage) + "x", text_color=color.blue)
+    
+    table.cell(info_table, 0, 3, "止盈", text_color=color.black)
+    table.cell(info_table, 1, 3, str.tostring(takeProfitPct * 100) + "%", text_color=color.green)
+    
+    table.cell(info_table, 0, 4, "止损", text_color=color.black)
+    table.cell(info_table, 1, 4, str.tostring(dynamicStopPct * 100, "#.##") + "%", text_color=color.red)
+    
+    table.cell(info_table, 0, 5, "ADX", text_color=color.black)
+    table.cell(info_table, 1, 5, str.tostring(adxVal, "#.##"), text_color=adxVal < adxThreshold ? color.green : color.red)
+    
+    table.cell(info_table, 0, 6, "趋势状态", text_color=color.black)
+    table.cell(info_table, 1, 6, trendFilter ? "多头" : "空头", text_color=trendFilter ? color.green : color.red)
+    
+    table.cell(info_table, 0, 7, "合约数量", text_color=color.black)
+    table.cell(info_table, 1, 7, "1张", text_color=color.blue)
+    
+    table.cell(info_table, 0, 8, "上轨", text_color=color.black)
+    table.cell(info_table, 1, 8, str.tostring(highRange, "#.####"), text_color=color.red)
+    
+    table.cell(info_table, 0, 9, "下轨", text_color=color.black)
+    table.cell(info_table, 1, 9, str.tostring(lowRange, "#.####"), text_color=color.green)
+
+// ===== 警报条件 =====
+alertcondition(longSignal, title="做多信号", message="BTC-USDT-SWAP横盘突破策略 - 做多信号")
+alertcondition(shortSignal, title="做空信号", message="BTC-USDT-SWAP横盘突破策略 - 做空信号") 

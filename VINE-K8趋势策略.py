@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VINE-K8趋势策略 Python版本
-基于Pine Script VINE-K8趋势策略转换而来
-适配青龙面板使用，支持多账户操作
+任务名称
+name: VINE-K8趋势策略
+定时规则
+cron: 1 1 1 1 *
 """
+
 
 import os
 import sys
@@ -343,12 +345,11 @@ class VINEK8Strategy:
         return True
     
     def calculate_order_size(self, latest_price: float) -> float:
-        """根据最新价格计算下单数量"""
-        # 计算保证金对应的合约数量
-        margin_value = self.margin * self.leverage
-        contract_value = latest_price * self.contract_face_value
-        size = margin_value / contract_value
-        return round(size, 2)
+        # 原有下单数量计算逻辑
+        order_size = self.margin * self.leverage * self.contract_face_value / latest_price
+        # 向下取整为10的倍数，且最小为10张
+        order_size = max(10, int(order_size // 10) * 10)
+        return order_size
     
     def place_order(self, trade_api, account_name: str, signal: str, entry_price: float, size: float) -> Optional[Dict]:
         """下单"""

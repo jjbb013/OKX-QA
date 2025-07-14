@@ -126,11 +126,11 @@ class VINEK8Strategy:
         self.inst_id = "VINE-USDT-SWAP"
         self.bar = "5m"
         self.limit = 8
-        self.leverage = 20
+        self.leverage = 5
         self.contract_face_value = 10  # VINE-USDT-SWAP合约面值为10美元
         
         # 风控参数
-        self.margin = 5  # 保证金(USDT)
+        self.margin = 1  # 保证金(USDT)
         self.take_profit_percent = 0.02  # 止盈2%
         self.stop_loss_percent = 0.015   # 止损1.5%
         

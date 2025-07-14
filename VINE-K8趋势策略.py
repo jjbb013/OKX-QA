@@ -345,9 +345,10 @@ class VINEK8Strategy:
         return True
     
     def calculate_order_size(self, latest_price: float) -> float:
-        # 原有下单数量计算逻辑
-        order_size = self.margin * self.leverage * self.contract_face_value / latest_price
-        # 向下取整为10的倍数，且最小为10张
+        # VINE合约每张面值10 VINE
+        contract_vine = 10
+        contract_value = contract_vine * latest_price  # 每张合约价值（USDT）
+        order_size = (self.margin * self.leverage) / contract_value
         order_size = max(10, int(order_size // 10) * 10)
         return order_size
     

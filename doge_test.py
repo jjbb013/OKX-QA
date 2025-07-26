@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-DOGE-USDT-SWAP布林影线策略
-定时规则：cron: 1 */5 * * * *
+任务名称
+name: OKX Doge 布林带大振幅反向策略 QA
+定时规则
+cron: 1 */5 * * * *
 """
 
 import os

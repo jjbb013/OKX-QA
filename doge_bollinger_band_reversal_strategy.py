@@ -37,8 +37,12 @@ STRATEGY_PARAMS = {                  # 策略核心参数
 # 数据管理模块 (已简化)
 # ========================
 def filter_completed_klines(klines: list) -> list:
-    """过滤未完结K线（第9位=1为完结）"""
-    return [kline for kline in klines if len(kline) > 8 and kline[8] == '1']
+    """
+    过滤未完结K线。
+    对于 get_mark_price_candlesticks 返回的数据，完结标记在第6位(index 5)。
+    """
+    # 标记价格K线数据有6个字段: [ts, o, h, l, c, confirm]
+    return [kline for kline in klines if len(kline) >= 6 and kline[5] == '1']
 
 def get_kline_data(inst_id: str, bar: str, limit: int, flag: str) -> list:
     """

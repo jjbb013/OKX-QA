@@ -204,22 +204,28 @@ class BollingerStrategy:
             min(o, c) > lower                               # 收盘价高于下轨
         )
         
-        # 计算入场价（影线顶端/底端+实体）
-        entry_short = max(o, c) + body
-        entry_long = min(o, c) - body
-        
-        # 返回信号字典
-        return {
-            'short_signal': short_signal,
-            'long_signal': long_signal,
-            'entry_short': entry_short,
-            'entry_long': entry_long,
-            'tp_short': entry_short * (1 - self.params['take_profit_perc']),  # 空单止盈价
-            'sl_short': entry_short * (1 + self.params['stop_loss_perc']),     # 空单止损价
-            'tp_long': entry_long * (1 + self.params['take_profit_perc']),    # 多单止盈价
-            'sl_long': entry_long * (1 - self.params['stop_loss_perc']),      # 多单止损价
-            'timestamp': ts  # K线时间戳
-        }
+        # 只有当至少有一个信号为True时，才返回信号字典
+        if short_signal or long_signal:
+            self.log(f"发现信号: 做多={long_signal}, 做空={short_signal}")
+            # 计算入场价（影线顶端/底端+实体）
+            entry_short = max(o, c) + body
+            entry_long = min(o, c) - body
+            
+            # 返回信号字典
+            return {
+                'short_signal': short_signal,
+                'long_signal': long_signal,
+                'entry_short': entry_short,
+                'entry_long': entry_long,
+                'tp_short': entry_short * (1 - self.params['take_profit_perc']),  # 空单止盈价
+                'sl_short': entry_short * (1 + self.params['stop_loss_perc']),     # 空单止损价
+                'tp_long': entry_long * (1 + self.params['take_profit_perc']),    # 多单止盈价
+                'sl_long': entry_long * (1 - self.params['stop_loss_perc']),      # 多单止损价
+                'timestamp': ts  # K线时间戳
+            }
+
+        # 如果没有任何信号，则返回None
+        return None
 
     # ---------- 仓位计算函数 ----------
     def calculate_position_size(self, entry_price: float, account_name: str) -> float:
@@ -247,8 +253,9 @@ class BollingerStrategy:
     # ---------- 交易执行函数 ----------
     def execute_trade(self, signal: dict):
         """执行交易信号"""
-        if not signal or ('short_signal' not in signal and 'long_signal' not in signal):
-            self.log("无有效信号")
+        self.log(f"执行交易信号: {signal}")
+        if not signal or (not signal.get('short_signal') and not signal.get('long_signal')):
+            self.log("信号字典无效或不包含任何交易方向，跳过执行")
             return
             
         # 更新信号时间戳（防重）
@@ -279,7 +286,8 @@ class BollingerStrategy:
                             entry,
                             self.format_price(signal['tp_short']),
                             self.format_price(signal['sl_short']),
-                            size
+                            size,
+                            account['flag']  # 传递flag
                         )
                         
                 # 处理多单信号
@@ -295,7 +303,8 @@ class BollingerStrategy:
                             entry,
                             self.format_price(signal['tp_long']),
                             self.format_price(signal['sl_long']),
-                            size
+                            size,
+                            account['flag']  # 传递flag
                         )
             except Exception as e:
                 self.log(f"账户处理异常: {str(e)}", acc_name)
@@ -309,11 +318,13 @@ class BollingerStrategy:
         entry: float, 
         tp: float, 
         sl: float,
-        size: float
+        size: float,
+        flag: str
     ):
         """
         ⚠️ 下单执行函数
         :param size: 已调整的合约张数
+        :param flag: 账户模式 ('0'实盘, '1'模拟盘)
         """
         # 构建订单参数
         order_params = build_order_params(
@@ -327,8 +338,8 @@ class BollingerStrategy:
             prefix="DOGE-BB"
         )
         
-        # 根据TRADE_MODE决定执行方式
-        if os.getenv('TRADE_MODE') == 'real':  # 实盘模式
+        # 根据flag决定执行方式
+        if flag == '0':  # 实盘模式
             result = api.place_order(**order_params)
             if result and result.get('code') == '0':
                 self.position_counters[acc_name] += 1  # 更新仓位计数

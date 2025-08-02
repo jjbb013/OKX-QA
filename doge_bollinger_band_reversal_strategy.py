@@ -8,9 +8,7 @@ cron: 1 */5 * * * *
 import os
 import sys
 import math
-import csv
 import numpy as np
-from glob import glob
 from typing import List, Dict, Optional
 
 # 添加utils目录
@@ -24,10 +22,6 @@ import okx.Trade as Trade
 import okx.MarketData as MarketData
 
 # ---------- 配置参数 ----------
-DATA_DIR = '/ql/data/DOGE-BB-DATA/'  # K线数据存储目录
-CSV_PREFIX = 'DOGE-5M'              # CSV文件前缀
-MAX_ROWS = 1000                     # 单文件最大K线数量
-MIN_ROWS = 50                       # 最小有效K线数量
 STRATEGY_PARAMS = {                  # 策略核心参数
     'leverage': 20,                  # 杠杆倍数
     'take_profit_perc': 0.03,        # 止盈比例 (3%)
@@ -40,112 +34,30 @@ STRATEGY_PARAMS = {                  # 策略核心参数
 }
 
 # ========================
-# 数据管理模块
+# 数据管理模块 (已简化)
 # ========================
 def filter_completed_klines(klines: list) -> list:
     """过滤未完结K线（第9位=1为完结）"""
     return [kline for kline in klines if len(kline) > 8 and kline[8] == '1']
 
-def fetch_kline_from_okx(inst_id: str, bar: str, limit: int, flag: str) -> list:
+def get_kline_data(inst_id: str, bar: str, limit: int, flag: str) -> list:
     """
-    从OKX获取K线数据
+    从OKX实时获取K线数据 (使用标记价格)
     :param inst_id: 交易品种 (如DOGE-USDT-SWAP)
     :param bar: K线周期 (如5m)
     :param limit: 获取数量
     :param flag: 账户类型 (0实盘/1模拟盘)
-    :return: 已过滤的K线数据列表
+    :return: 已过滤的完结K线数据列表
     """
     market_api = MarketData.MarketAPI(flag=flag)
-    result = market_api.get_candlesticks(instId=inst_id, bar=bar, limit=str(limit))
+    # ⚠️ 使用 get_mark_price_candlesticks 替换旧接口
+    result = market_api.get_mark_price_candlesticks(instId=inst_id, bar=bar, limit=str(limit))
+    
     if result and result.get('code') == '0':
-        return filter_completed_klines(result['data'])  # 仅返回已完结K线
+        return filter_completed_klines(result['data'])
+    
+    print(f"获取K线数据失败: {result.get('msg', '未知错误')}")
     return []
-
-def get_latest_csv_file(dir_path: str, prefix: str) -> Optional[str]:
-    """获取最新的CSV文件路径"""
-    files = sorted(glob(os.path.join(dir_path, f"{prefix}-*.csv")))
-    return files[-1] if files else None
-
-def load_kline_from_csv(filepath: str) -> list:
-    """从CSV加载K线数据"""
-    if not filepath or not os.path.exists(filepath):
-        return []
-    with open(filepath, 'r') as f:
-        return list(csv.reader(f))
-
-def save_kline_to_csv(filepath: str, kline_data: list):
-    """保存K线到CSV"""
-    with open(filepath, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerows(filter_completed_klines(kline_data))  # 保存时二次过滤
-
-def append_kline_to_csv(filepath: str, new_kline_data: list):
-    """追加新K线到CSV"""
-    existing = load_kline_from_csv(filepath)
-    existing_ts = {row[0] for row in existing}  # 获取已有时间戳
-    # 过滤已存在数据
-    new_rows = [row for row in new_kline_data if row[0] not in existing_ts]
-    if not new_rows:
-        return
-    with open(filepath, 'a', newline='') as f:
-        csv.writer(f).writerows(new_rows)
-
-def rotate_csv_file(dir_path: str, prefix: str, max_rows: int) -> str:
-    """
-    文件滚动存储：当文件超过max_rows时创建新文件
-    :return: 当前使用的文件路径
-    """
-    latest_file = get_latest_csv_file(dir_path, prefix)
-    if not latest_file:  # 无文件时创建首个文件
-        new_file = os.path.join(dir_path, f"{prefix}-1.csv")
-        return new_file
-        
-    # 检查行数是否超限
-    if len(load_kline_from_csv(latest_file)) < max_rows:
-        return latest_file
-        
-    # 生成新文件名 (编号+1)
-    idx = int(latest_file.split('-')[-1].replace('.csv', '')) + 1
-    return os.path.join(dir_path, f"{prefix}-{idx}.csv")
-
-def get_kline_data_with_cache(
-    inst_id: str, 
-    bar: str, 
-    min_rows: int = MIN_ROWS, 
-    max_rows: int = MAX_ROWS, 
-    flag: str = '0'
-) -> list:
-    """
-    获取K线数据（本地缓存+实时拉取）
-    :return: 至少包含min_rows条K线的列表（最新数据在前）
-    """
-    os.makedirs(DATA_DIR, exist_ok=True)
-    latest_csv = get_latest_csv_file(DATA_DIR, CSV_PREFIX)
-    kline_data = load_kline_from_csv(latest_csv) if latest_csv else []
-    
-    # 本地数据不足时从OKX拉取
-    if len(kline_data) < min_rows:
-        fetch_count = max(min_rows, 100)  # 至少拉取100条
-        new_data = fetch_kline_from_okx(inst_id, bar, fetch_count, flag)
-        if new_data:
-            kline_data = new_data + kline_data  # 新数据在前
-            
-        # 滚动存储
-        csv_path = rotate_csv_file(DATA_DIR, CSV_PREFIX, max_rows)
-        save_kline_to_csv(csv_path, kline_data[-max_rows:])
-        latest_csv = csv_path
-    
-    # 增量更新最新数据
-    new_data = fetch_kline_from_okx(inst_id, bar, 5, flag)
-    if new_data:
-        append_kline_to_csv(latest_csv, new_data)
-        # 检查是否触发滚动
-        if len(load_kline_from_csv(latest_csv)) > max_rows:
-            csv_path = rotate_csv_file(DATA_DIR, CSV_PREFIX, max_rows)
-            save_kline_to_csv(csv_path, load_kline_from_csv(latest_csv)[-max_rows:])
-            latest_csv = csv_path
-    
-    return load_kline_from_csv(latest_csv)[-min_rows:]
 
 # ========================
 # 核心策略类
@@ -238,7 +150,7 @@ class BollingerStrategy:
         :return: 信号字典（无信号时返回None）
         """
         if len(kline_data) < self.params['bb_length']:
-            self.log("K线数据不足，无法计算布林带")
+            self.log(f"K线数据不足 ({len(kline_data)}/{self.params['bb_length']})，无法计算布林带")
             return None
             
         # 解析最新K线
@@ -248,6 +160,7 @@ class BollingerStrategy:
         # ⚠️ 防重复信号：同一根K线不重复触发
         current_ts = int(ts) // 1000
         if current_ts <= self.last_signal_ts:
+            self.log(f"信号已在时间戳 {current_ts} 处理过，跳过")
             return None
             
         # 计算布林带
@@ -406,10 +319,12 @@ class BollingerStrategy:
                 self.log(f"下单失败: {err}", acc_name)
         else:  # 模拟盘模式
             self.log(f"[SIM] 忽略下单: {side} {size}张 @ {entry}", acc_name)
+            self.send_notification(acc_name, side, entry, size, tp, sl) # 模拟盘也发通知
 
     def send_notification(self, acc_name: str, side: str, price: float, size: float, tp: float, sl: float):
         """发送Bark通知"""
-        title = f"DOGE {side.upper()}信号触发"
+        mode = "实盘" if os.getenv('TRADE_MODE') == 'real' else "模拟"
+        title = f"DOGE {side.upper()}信号触发 ({mode})"
         content = f"""账户: {acc_name}
 操作: {'做空' if side=='sell' else '做多'}
 价格: {price:.6f}
@@ -426,26 +341,27 @@ def main():
     """策略主入口"""
     strategy = BollingerStrategy()
     if not strategy.accounts:
-        print("未配置OKX账户，请设置环境变量")
+        strategy.log("未配置OKX账户，请设置环境变量")
         return
         
-    # 加载K线数据（自动缓存）
-    klines = get_kline_data_with_cache(
+    # 实时获取K线数据
+    klines = get_kline_data(
         inst_id=strategy.inst_id,
         bar=strategy.bar,
-        min_rows=strategy.params['bb_length'] + 10,
+        limit=100,  # 获取100根K线，确保足够计算
         flag=strategy.accounts[0]['flag']
     )
     
     if not klines:
-        print("获取K线数据失败")
+        strategy.log("获取K线数据失败，无法继续执行")
         return
         
     # 生成并执行信号
     if signal := strategy.generate_signal(klines):
+        strategy.log("生成交易信号，准备执行...")
         strategy.execute_trade(signal)
     else:
-        print("未生成交易信号")
+        strategy.log("未生成有效交易信号")
 
 if __name__ == "__main__":
     try:
@@ -454,4 +370,4 @@ if __name__ == "__main__":
         import traceback
         err_msg = f"策略异常: {str(e)}\n{traceback.format_exc()}"
         print(err_msg)
-        send_bark_notification("策略崩溃", err_msg)
+        send_bark_notification("DOGE策略崩溃", err_msg)

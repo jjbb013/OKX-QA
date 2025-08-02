@@ -119,6 +119,31 @@ def main():
     is_red = close < open_
     logger.info(f"振幅={range2:.2f}%, in_range2={in_range2}, is_green={is_green}, is_red={is_red}")
 
+    # ====== 新增：EMA趋势计算与日志 ======
+    closes = [float(row[4]) for row in kline_data]
+    def calculate_ema(prices, period):
+        if len(prices) < period:
+            return None
+        alpha = 2 / (period + 1)
+        ema = prices[0]
+        for price in prices[1:]:
+            ema = alpha * price + (1 - alpha) * ema
+        return ema
+    ema21_value = calculate_ema(closes, 21)
+    ema60_value = calculate_ema(closes, 60)
+    ema144_value = calculate_ema(closes, 144)
+    trend = "未知"
+    if ema21_value is not None and ema60_value is not None and ema144_value is not None:
+        if ema21_value > ema60_value and ema60_value > ema144_value:
+            trend = "多头趋势"
+        elif ema21_value < ema60_value and ema60_value < ema144_value:
+            trend = "空头趋势"
+        else:
+            trend = "震荡/无明显趋势"
+        logger.info(f"[DEBUG][{get_shanghai_time()}] EMA21={ema21_value:.4f}, EMA60={ema60_value:.4f}, EMA144={ema144_value:.4f}, 趋势判断: {trend}")
+    else:
+        logger.info(f"[DEBUG][{get_shanghai_time()}] EMA数据不足，无法判断趋势")
+
     if in_range2:
         order_price = None
         direction = None
@@ -151,10 +176,12 @@ def main():
         order_params = build_order_params(
             SYMBOL, side, order_price, qty, pos_side, tp, sl
         )
+        logger.info(f"[DEBUG][{get_shanghai_time()}] 提交OKX下单参数: {order_params}")
         try:
             resp = trade_api.place_order(**order_params)
         except Exception as e:
             resp = {"error": str(e)}
+        logger.info(f"[DEBUG][{get_shanghai_time()}] OKX下单返回: {resp}")
         sh_time = get_shanghai_time()
         bark_title = "VINE大振幅反转开仓"
         bark_content = (

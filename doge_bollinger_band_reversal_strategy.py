@@ -116,7 +116,7 @@ class BollingerStrategy:
         """初始化交易API对象"""
         return Trade.TradeAPI(
             api_key=account['api_key'],
-            secret_key=account['secret_key'],
+            secret=account['secret_key'],  # 修复：根据SDK要求，参数名应为 secret
             passphrase=account['passphrase'],
             flag=account['flag'],
             debug=False

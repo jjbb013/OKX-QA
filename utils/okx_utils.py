@@ -15,12 +15,10 @@ import okx.Trade as Trade
 import requests
 
 # ========== 环境与配置 ==========
-IS_DEVELOPMENT = True
-# try:
-#     from config_local import *
-#     IS_DEVELOPMENT = True
-# except ImportError:
-#     IS_DEVELOPMENT = False
+# 通过环境变量 ENV_MODE 判断环境。默认'development'。
+# 在青龙面板等生产环境中，请将 ENV_MODE 设置为 'production'。
+ENV_MODE = os.environ.get('ENV_MODE', 'development')
+IS_DEVELOPMENT = (ENV_MODE == 'development')
 
 # ========== 新增：本地开发环境自动加载根目录.env_dev ==========
 if IS_DEVELOPMENT:
@@ -209,4 +207,4 @@ def get_kline_data(api_key, secret_key, passphrase, inst_id, bar, limit=None, fl
             print(f"[okx_utils] [ERROR] 获取K线失败: {e}")
         if attempt < max_retries:
             time.sleep(retry_delay)
-    return None 
+    return None

@@ -49,14 +49,28 @@ def get_kline_data(inst_id: str, bar: str, limit: int, flag: str) -> list:
     :param flag: 账户类型 (0实盘/1模拟盘)
     :return: 已过滤的完结K线数据列表
     """
-    market_api = MarketData.MarketAPI(flag=flag)
-    # ⚠️ 使用 get_mark_price_candlesticks 替换旧接口
-    result = market_api.get_mark_price_candlesticks(instId=inst_id, bar=bar, limit=str(limit))
-    
+    result = None  # 初始化result
+    try:
+        print(f"[DEBUG] 准备初始化 MarketAPI, flag={flag}")
+        market_api = MarketData.MarketAPI(flag=flag)
+        print(f"[DEBUG] MarketAPI 初始化成功, 准备获取K线...")
+        # ⚠️ 使用 get_mark_price_candlesticks 替换旧接口
+        result = market_api.get_mark_price_candlesticks(instId=inst_id, bar=bar, limit=str(limit))
+        print(f"[DEBUG] OKX API 原始返回: {result}") # 打印完整原始返回
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] 调用OKX API时发生异常: {e}")
+        print(traceback.format_exc())
+        return []
+
     if result and result.get('code') == '0':
-        return filter_completed_klines(result['data'])
+        completed_klines = filter_completed_klines(result['data'])
+        print(f"[DEBUG] API成功返回 {len(result['data'])} 条K线, 过滤后得到 {len(completed_klines)} 条已完结K线。")
+        return completed_klines
     
-    print(f"获取K线数据失败: {result.get('msg', '未知错误')}")
+    # 如果代码不是'0'或result为空
+    err_msg = result.get('msg', '无有效错误信息') if result else 'API无返回'
+    print(f"[ERROR] 获取K线数据失败: {err_msg}")
     return []
 
 # ========================
@@ -343,13 +357,17 @@ def main():
     if not strategy.accounts:
         strategy.log("未配置OKX账户，请设置环境变量")
         return
+
+    # 增加日志，显示正在使用的账户信息
+    active_account = strategy.accounts[0]
+    strategy.log(f"准备为账户 {active_account.get('name', 'N/A')} 获取K线数据, flag={active_account.get('flag', 'N/A')}")
         
     # 实时获取K线数据
     klines = get_kline_data(
         inst_id=strategy.inst_id,
         bar=strategy.bar,
         limit=100,  # 获取100根K线，确保足够计算
-        flag=strategy.accounts[0]['flag']
+        flag=active_account['flag']
     )
     
     if not klines:

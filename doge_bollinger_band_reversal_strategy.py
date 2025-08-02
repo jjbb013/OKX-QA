@@ -114,12 +114,14 @@ class BollingerStrategy:
 
     def init_trade_api(self, account: Dict) -> Trade.TradeAPI:
         """初始化交易API对象"""
+        # 按照官方示例，使用位置参数以保证兼容性
+        # 参数顺序: api_key, secret_key, passphrase, debug, flag
         return Trade.TradeAPI(
-            api_key=account['api_key'],
-            secret=account['secret_key'],  # 修复：根据SDK要求，参数名应为 secret
-            passphrase=account['passphrase'],
-            flag=account['flag'],
-            debug=False
+            account['api_key'],
+            account['secret_key'],
+            account['passphrase'],
+            False,  # debug
+            account['flag']
         )
 
     def log(self, message: str, account_name: str = ""):
